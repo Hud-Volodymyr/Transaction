@@ -1,15 +1,12 @@
 'use strict';
 
+const event = () => ({ a: [], b: [] });
+const exec = fn => fn();
+
 // Interface definition
 const emitter = () => {
-  const events = {
-    commit: { a: [], b: [], },
-    rollback: { a: [], b: [], },
-    timeout: { a: [], b: [], },
-    set: { a: [], b: [], },
-    get: { a: [], b: [], },
-    revoke: { a: [], b: [], },
-  };
+  const eventNames = ['commit', 'rollback', 'timeout', 'set', 'get', 'revoke'];
+  const events = eventNames.reduce((acc, item) => acc[item] = event(), {});
   const ee = {
     on: (name, callback) => {
       const i = name[0];
@@ -17,27 +14,15 @@ const emitter = () => {
       const event = events[name][i];
       if (event) event.push(callback);
     },
+
     emit: name => {
       name = name.slice(1);
       const event = events[name];
-      if (event.a.length && !event.b.length) event
-        .a
-        .forEach(listener => {
-          listener();
-        });
-      if (event.b.length && !event.a.length) event
-        .b
-        .forEach(listener => {
-          listener();
-        });
-      if (event.a.length && event.b.length) {
-        event
-          .b
-          .forEach(listener => {
-            listener();
-          });
-      }
+      if (event.a.length && !event.b.length) event.a.forEach(exec);
+      if (event.b.length && !event.a.length) event.b.forEach(exec);
+      if (event.a.length && event.b.length) event.b.forEach(exec);
     },
+
     once: (name, listener) => {
       const rm = () => {
         ee.remove(name, rm);
@@ -45,6 +30,7 @@ const emitter = () => {
       };
       ee.on(name, rm);
     },
+
     remove: (name, func) => {
       const i = name[0];
       name = name.slice(1);
@@ -56,8 +42,6 @@ const emitter = () => {
   };
   return ee;
 };
-const ee = emitter();
-
 
 class Transaction {
   constructor() {
@@ -67,33 +51,33 @@ class Transaction {
   static start(data) {
     const transaction = new Transaction();
     const { proxy, revoke } = Proxy.revocable(data, {
-
       get(target, key) {
-        ee.emit('aget');
-        if (key === 'delta') return transaction.delta;
-        if (transaction
-          .delta
-          .hasOwnProperty(key)) return transaction.delta[key];
+        const { delta } = transaction;
+        Transaction.ee.emit('aget');
+        if (key === 'delta') return delta;
+        if (delta.hasOwnProperty(key)) return delta[key];
         return target[key];
       },
-      getOwnPropertyDescriptor: (target, key) => (
-        Object.getOwnPropertyDescriptor(
-          transaction
-            .delta
-            .hasOwnProperty(key) ? transaction.delta : target, key
-        )
-      ),
+
+      getOwnPropertyDescriptor: (target, key) => {
+        const { delta } = transaction;
+        const that = delta.hasOwnProperty(key) ? delta : target;
+        return Object.getOwnPropertyDescriptor(that, key);
+      },
+
       ownKeys() {
         const changes = Object.keys(transaction.delta);
         const keys = Object.keys(data).concat(changes);
         return keys.filter((x, i, a) => a.indexOf(x) === i);
       },
+
       set(target, key, val) {
-        ee.emit('bset');
+        const { delta } = transaction;
+        Transaction.ee.emit('bset');
         console.log('set', key, val);
-        if (target[key] === val) delete transaction.delta[key];
-        else transaction.delta[key] = val;
-        ee.emit('aset');
+        if (target[key] === val) delete delta[key];
+        else delta[key] = val;
+        Transaction.ee.emit('aset');
         return true;
       }
     });
@@ -103,40 +87,46 @@ class Transaction {
   }
 
   commit() {
-    ee.emit('bcommit');
+    Transaction.ee.emit('bcommit');
     console.log('\ncommit transaction');
     Object.assign(this.data, this.delta);
     this.delta = {};
-    ee.emit('acommit');
+    Transaction.ee.emit('acommit');
   }
+
   rollback() {
-    ee.emit('brollback');
+    Transaction.ee.emit('brollback');
     console.log('\nrollback transaction');
     this.delta = {};
-    ee.emit('arollback');
+    Transaction.ee.emit('arollback');
   }
+
   revoke() {
-    ee.emit('brevoke');
+    Transaction.ee.emit('brevoke');
     console.log('\nrevoke trasaction');
     this.rev();
-    ee.emit('arevoke');
+    Transaction.ee.emit('arevoke');
   }
+
   timeout(msec) {
-    ee.emit('btimeout');
+    Transaction.ee.emit('btimeout');
     setTimeout(() => {
       this.rollback();
-      //this.commit();
-      ee.emit('atimeout');
+      Transaction.ee.emit('atimeout');
     }, msec);
   }
+
   before(event, listener) {
-    ee.once('b' + event, listener);
+    Transaction.ee.once('b' + event, listener);
   }
+
   after(event, listener) {
-    ee.once('a' + event, listener);
+    Transaction.ee.once('a' + event, listener);
   }
   // Events: commit, rollback, revoke, set, get, timeout
 }
+
+Transaction.ee = emitter();
 
 // Usage
 
